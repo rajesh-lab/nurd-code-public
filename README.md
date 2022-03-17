@@ -26,4 +26,7 @@ Use `--nr_only` to learn only the weight model. Weights are saved by default and
 LOGS/
 SAVED_DATA/
 SAVED_MODELS/
+cub/
 ```
+
+`cub/` is the directory to put the waterbirds data.
