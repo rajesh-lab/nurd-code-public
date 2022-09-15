@@ -1,5 +1,7 @@
 # nurd-code-public
 
+Companion code for the paper [Out-of-distribution Generalization in the Presence of Nuisance-Induced Spurious Correlations](https://openreview.net/forum?id=12RoR2o32T).
+
 Email <aahlad@nyu.edu> to get the datasets used in the paper. You can also generate them using `save_processed_dataset_as_pt.py` which takes data and stores them as pytorch tensors to make training very fast. If you want to use the raw data, please make a dataset with the functionality of the class `XYZ_DatasetWithIndices` in the `dataloaders.py` file.
 
  > example run for the chest X-ray experiment with default distillation
