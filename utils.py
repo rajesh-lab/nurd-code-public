@@ -16,7 +16,7 @@ def print_dict(dct):
 def print_dict_of_dicts(dct_of_dcts):
     print("")
     for key, dct in dct_of_dcts.items():
-        print(f" = {key} = ", end='\t')
+        print(f" = {key:15s} = ", end='\t')
         print_dict(dct)
         print("")
 
@@ -25,8 +25,10 @@ class Bunch(object):
         self.__dict__.update(adict)
     def update(self, adict):
         self.__dict__.update(adict)
+    def keys(self):
+        return self.__dict__.keys()
 
-def get_DATA_HPARAMS(args):
+def get_DATA_HPARAMS(args, erm=False):
     DATA_HPARAMS = {}
     DATA_HPARAMS['shuffle'] = True
     DATA_HPARAMS['subset'] = True
@@ -35,15 +37,24 @@ def get_DATA_HPARAMS(args):
     DATA_HPARAMS['workers'] = args.workers
     DATA_HPARAMS['input_shape'] = [3 if args.color else 1] + \
         [args.img_side, args.img_side]
-    DATA_HPARAMS['batch_size'] = args.nr_batch_size
-    DATA_HPARAMS['hosp'] = args.hosp
-    DATA_HPARAMS['rho'] = args.rho
-    DATA_HPARAMS['rho_test'] = args.rho_test
-    DATA_HPARAMS['label_balance_method'] = args.label_balance_method
-    DATA_HPARAMS['change_disease'] = args.change_disease
-    DATA_HPARAMS['grayscale'] = args.grayscale
-    if 'naug' in vars(args).keys() and args.naug == "pr":
-        DATA_HPARAMS['patch_size'] = args.patch_size
+    if erm:
+        DATA_HPARAMS['batch_size'] = args.batch_size
+        DATA_HPARAMS['label_balance_method'] = args.label_balance_method
+        DATA_HPARAMS['change_disease'] = args.change_disease
+        DATA_HPARAMS['grayscale'] = args.grayscale
+    else:
+        DATA_HPARAMS['batch_size'] = args.nr_batch_size
+        DATA_HPARAMS['hosp'] = args.hosp
+        DATA_HPARAMS['rho'] = args.rho
+        DATA_HPARAMS['rho_test'] = args.rho_test
+        DATA_HPARAMS['label_balance_method'] = args.label_balance_method
+        DATA_HPARAMS['change_disease'] = args.change_disease
+        DATA_HPARAMS['grayscale'] = args.grayscale
+        if 'naug' in vars(args).keys() and args.naug == "pr":
+            DATA_HPARAMS['patch_size'] = args.patch_size
+        if 'naug' in vars(args).keys() and args.naug is not None and "pass" in args.naug:
+            DATA_HPARAMS['freq'] = args.freq
+            
 
     return DATA_HPARAMS
     
@@ -103,10 +114,11 @@ def process_save_name(args):
                             color=args.color,
                             true_waterbirds=args.true_waterbirds,
                             label_balance_method=args.label_balance_method,
-                            eval=args.eval
+                            eval=args.eval,
+                            bal_val=args.bal_val
                         )
 
-def _process_save_name_helper(dataset, rho, rho_test, img_side, color, true_waterbirds=False, label_balance_method='downsample', eval=False, change_disease=None, datasetTWO="mimic",):
+def _process_save_name_helper(dataset, rho, rho_test, img_side, color, true_waterbirds=False, label_balance_method='downsample', eval=False, change_disease=None, datasetTWO="mimic",bal_val=False):
     if dataset == "joint":
         if change_disease is not None:
             if datasetTWO == "mimic":
@@ -142,7 +154,9 @@ def _process_save_name_helper(dataset, rho, rho_test, img_side, color, true_wate
     
     if dataset == "synthetic":
         NAME = "{}_large".format(NAME)
-
+    
+    # if bal_val:
+    #     NAME = "{}_bal_val".format(NAME)
     return NAME
 
 
@@ -158,6 +172,8 @@ def _WEIGHT_MODEL_NUISANCE_TYPE(args):
         return "synthetic_last"
     elif args.dataset == "joint":
         return "holemask" #side_and_top_mask"
+    elif args.dataset == "revcmnist":
+        return "colorize" #side_and_top_mask"
     else:
         return "holemask"
 
@@ -196,6 +212,10 @@ all_params = [
     'nuisance'
 ]
 
+
+def add_common(parser):
+    parser.add_argument('--label_balanced', action="store_true", help='balance the loss', default=False)
+
 def add_args(parser, parameter_type):
     if parameter_type == "config":
         # generic parameters
@@ -210,6 +230,7 @@ def add_args(parser, parameter_type):
         parser.add_argument('--nr_only', action='store_true', help='run weight models only and stop')
         parser.add_argument('--load_weights', action='store_true', help='load weights and do dist')
         parser.add_argument('--eval', action='store_true', help='uses datasets with eval subsets')
+        parser.add_argument('--bal_val', action='store_true', help='uses datasets with eval subsets that are balanced.')
         parser.add_argument('--load_dist_model', action='store_true', help='loads saved distillation model and only report perf; no training')
         parser.add_argument('--load_final_model', action='store_true', help='loads saved final model and only report perf; no training')
         parser.add_argument('--dont_do_critic', action='store_true', help='prevents the critic training on loaded model', default=False)
@@ -288,12 +309,51 @@ def add_args(parser, parameter_type):
 
     if parameter_type == "nuisance":
         # nuisance specification 
-        parser.add_argument('--naug', type=str, default=None, help="type of naug", choices=["HG", "PR", "hybrid"])
+        parser.add_argument('--naug', type=str, default=None, help="type of naug") # choices=["HG", "PR", "hybrid", "low_pass", "high_pass", "intensity", "crop"])
         parser.add_argument('--patch_size', type=int, default=None, help='patch size in randomization')
         parser.add_argument('--sigma', type=float, default=None, help="add noise to the image")
         parser.add_argument('--border', type=float, default=7, help='value or correlation in the test data. for all data')
         parser.add_argument('--zero_nuisance', action='store_true', help='0 * nuisance to nurd')
         parser.add_argument('--pred_from_center', action='store_true', help=' prediction only from the center ')
+        parser.add_argument('--freq', type=int, default=None, help='specified what frequency range to include or remove.')
+        parser.add_argument('--percentile', type=float, default=None, help='float of percentile above which intensity pixels are 0d.')
+        parser.add_argument('--blur_kernel', type=int, default=None, help='specified what frequency range to include or remove.')
+
+def add_erm_args(parser, parameter_type):
+    if parameter_type == "config":
+        # generic parameters
+        parser.add_argument('--prefix', type=str, help='folder organization', default=None)
+        parser.add_argument('--seed', type=int, default=1234, help='seed for the run')
+        parser.add_argument('--workers', type=int, default=2, help='Number of workers to use in loaders')
+        parser.add_argument('--debug',  type=int, default=0, help='print things; at 1 print only pred model stuff, at 2 print everything')
+        parser.add_argument('--device', type=str, default="", help='DONT CHANGE')
+        parser.add_argument('--load_model', action='store_true', help='loads saved distillation model and only report perf; no training')
+        parser.add_argument('--print_interval', type=int, default=10, help='mini batch size')
+
+    if parameter_type == "dataset":
+        # dataset_parameters
+        parser.add_argument('--dataset', type=str, default="chexpert", help='Which dataset to do ERM')
+        parser.add_argument('--true_waterbirds', action='store_true', help="true waterbirds")
+        parser.add_argument('--equalized_groups', action='store_true', help="equal props")
+        parser.add_argument('--img_side', type=int, default=32, help='run on images of size')
+        parser.add_argument('--dry', action='store_true', help='run on subset')
+        parser.add_argument('--label_balance_method', type=str, default="downsample", help='upsample or downsample to balance in the joint dataset', choices=["upsample", "downsample"])
+        parser.add_argument('--change_disease', type=str, help='disease to use instead of pneumonia', default=None)
+        parser.add_argument('--color', action='store_true', help='set images to color')    
+        parser.add_argument('--grayscale', action='store_true', help='set images to grayscale')
+        parser.add_argument('--hosp', action='store_true', help='prediction only from the center', default=True)
+        parser.add_argument('--hosp_predict', action='store_true', help='pred the hospital', default=False)
+        parser.add_argument('--pred_model_type', type=str, default=None, help='pred model type')
+
+    if parameter_type == "training":
+        # training parameters
+        parser.add_argument('--epochs', type=int, default=10, help='mini batch size')
+        parser.add_argument('--batch_size', type=int, default=128, help='mini batch size')
+        parser.add_argument('--noise', action='store_true', help='add training noise to x')
+        default_lr=1e-3
+        parser.add_argument('--lr', type=float, default=default_lr, help='learning rate for theta in p_theta(Y | r_gamma(X) ) ')
+        parser.add_argument('--decay', type=float, default=1e-4, help='l2 regularization only works critic model')
+        parser.add_argument('--augment', action='store_true', help="augment every batch half the time")
 
 
 def SANITY_CHECKS_ARGS(args):
@@ -305,6 +365,9 @@ def SANITY_CHECKS_ARGS(args):
 
         if args.naug == "PR":
             assert args.patch_size is not None
+        
+        if args.naug == "low_pass" or args.naug == "high_pass":
+            assert args.freq is not None
     
     assert args.lambda_ > -1e-3, args.lambda_
     assert not args.conditional, "THIS CODE HAS NOT BEEN CHECKED TO WORK."
@@ -312,7 +375,7 @@ def SANITY_CHECKS_ARGS(args):
     # if args.dataset == "synthetic":
     # assert not args.load_weights, "CANNOT LOAD WEIGHTS BECAUSE THE SYNTHETIC DATA IS GENERATED IN EACH CALL TO THE DATALOADERS."
     
-    assert args.naug is None, "COMMENT THIS TO RUN WITH NEGATIVE NUISANCES."
+    # assert args.naug is None, "COMMENT THIS TO RUN WITH NEGATIVE NUISANCES."
 
     if args.warmup_critic:
         assert args.randomrestart < 0, args.randomrestart
@@ -412,7 +475,7 @@ def multiple_by_labelmarginal_and_balance_weights(weight_vec, y_long, y_weights_
 
     return _weights
 
-def make_weights(y, z, args, weights_type="balanced"):
+def make_weights(y, z, args, weights_type="balanced", ignore_coeff=False):
     assert weights_type in ['balanced', 'extreme'], weights_type
     if args.dataset == "synthetic":
         print("ERM IS THE ONLY CASE FOR WHICH THE SYNTHETIC DATASET WILL REQUIRE WEIGHTS. THIS IS BECAUSE Z is CNTS IN THE SYNTHETIC EXAMPLE.")
@@ -421,7 +484,7 @@ def make_weights(y, z, args, weights_type="balanced"):
     weights = torch.zeros_like(y).float()
     y_long = y.long().view(-1)
     z_long = z.long().view(-1)
-    if args.coeff > 0:
+    if args.coeff > 0 and not ignore_coeff:
         assert y.max() < 2, y.max()
         assert z.max() < 2, z.max() # the coeff specification is only built for
         weights[y_long==z_long] = 1/args.coeff
@@ -434,6 +497,7 @@ def make_weights(y, z, args, weights_type="balanced"):
                 yz_key_slice = torch.logical_and(y_check, z_check)
                 print(y_key, z_key, weights[yz_key_slice].mean())
     else:
+        print(" making weights from Y and Z. ")
         for y_key in torch.unique(y_long):
             for z_key in torch.unique(z_long):
                 y_check = y_long==y_key
@@ -445,7 +509,6 @@ def make_weights(y, z, args, weights_type="balanced"):
                 weights[yz_key_slice] = p_ygz_estimate
                 print(y_key, z_key, p_ygz_estimate)
                 
-    
     if weights_type=="extreme":
         # creating extreme weights
         prob_masses = 1/weights

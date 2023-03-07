@@ -20,7 +20,6 @@ import PIL
 import torch
 import torch.utils.data
 from argparse import ArgumentParser
-import pytorch_lightning as pl
 
 import sys
 from os.path import dirname
@@ -62,7 +61,6 @@ def cli_main():
         assert args.dataset == "waterbirds", "This is only done for waterbirds"
     if args.dataset == "waterbirds":
         assert CAN_LOAD_WATERBIRDS
-    pl.seed_everything(args.seed)
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)

@@ -2,7 +2,7 @@
 from re import I
 from threading import current_thread
 # from typing import NewType
-import pytorch_lightning as pl
+# import pytorch_lightning as pl
 import torch
 from torch.nn import functional as F
 import torch.nn as nn
@@ -34,7 +34,8 @@ class TopLayer(nn.Module):
             self.top2 = nn.Linear(mid_size, mid_size, bias=False)
             self.top3 = nn.Linear(mid_size, out_size, bias=False)
         else:
-            self.top = nn.Linear(in_size, out_size) #, bias=False)
+            # self.top = nn.Linear(in_size, out_size) #, bias=False)
+            self.top = nn.Linear(in_size, out_size, bias=False)
 
     def forward(self, x):
         if self.nonlin:
@@ -200,7 +201,7 @@ class ImageRepresentation(nn.Module):
 
         self.hparams = hparams
         # self.transform_func = construct_transform(_transform_type, N_CHANNELS=3 if hparams.dataset=='cmnist' else 1, SIDE=hparams.img_side, hparams=hparams)
-        self.transform_func = construct_transform(_transform_type, N_CHANNELS=3 if hparams.dataset in ['cmnist'] + waterbirds_list else 1, SIDE=hparams.img_side, hparams=self.hparams)
+        self.transform_func = construct_transform(_transform_type, N_CHANNELS=3 if hparams.dataset in ['cmnist'] + waterbirds_list or hparams.color else 1, SIDE=hparams.img_side, hparams=self.hparams)
         self.network = process_model_type(model_type=hparams.model_type, model_stage=hparams.model_stage, _for_critic_model=_for_critic_model)
 
         with torch.no_grad():
