@@ -6,7 +6,6 @@ import os
 import copy
 import random
 from re import M
-from black import diff
 import numpy as np
 
 import torch
@@ -325,11 +324,19 @@ def cli_main():
         return
     
     train_weights = weights[train_split]
-    val_weights = weights[val_split]
 
     y_train_long = train_dataset.y[train_split].long().view(-1).to(weights.device)
     y_val_long = train_dataset.y[val_split].long().view(-1).to(weights.device)
     y_test_long = datasets_dict['test'].y.long().view(-1).to(weights.device)
+
+    if args.bal_val:
+        print(" Exactly balancing the validation data. ")
+        z_val_long = train_dataset.z[val_split].long().view(-1).to(weights.device)
+        assert y_val_long.shape == z_val_long.shape, (y_val_long.shape, z_val_long.shape)
+        val_weights = utils.make_weights(y_val_long, z_val_long, args=args, ignore_coeff=args.bal_val)
+        # assert False, (val_weights[y_val_long == z_val_long][:10], val_weights[y_val_long != z_val_long][:10])
+    else:
+        val_weights = weights[val_split]
 
     weights[train_split] = utils.multiple_by_labelmarginal_and_balance_weights(train_weights, y_train_long, y_weights_from_array=y_test_long)
     weights[val_split] = utils.multiple_by_labelmarginal_and_balance_weights(val_weights, y_val_long, y_weights_from_array=y_test_long)

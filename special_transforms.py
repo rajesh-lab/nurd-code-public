@@ -16,13 +16,123 @@ from torch.utils.data import DataLoader
 from argparse import ArgumentParser
 from torchvision.utils import save_image
 
+
+class RandomCrop:
+    """Applies the :class:`~torchvision.transforms.RandomCrop` transform to a batch of images.
+    Args:
+        size (int): Desired output size of the crop.
+        padding (int, optional): Optional padding on each border of the image. 
+            Default is None, i.e no padding.
+        device (torch.device,optional): The device of tensors to which the transform will be applied.
+    """
+    
+    def __init__(self, size, device='cpu'):
+        self.size = size
+        self.padding = None
+        self.device = device
+        
+    def __call__(self, tensor):
+        """
+        Args:
+            tensor (Tensor): Tensor of size (N, C, H, W) to be cropped.
+        Returns:
+            Tensor: Randomly cropped Tensor.
+        """
+        IN_SIZE=tensor.shape[-1]
+        if self.padding is not None:
+            padded = torch.zeros((tensor.size(0), tensor.size(1), tensor.size(2) + self.padding * 2, 
+                                  tensor.size(3) + self.padding * 2), dtype=tensor.dtype, device=self.device)
+            padded[:, :, self.padding:-self.padding, self.padding:-self.padding] = tensor
+        else:
+            padded = tensor
+        # print(padded.shape)
+            
+        h, w = padded.size(2), padded.size(3)
+        th, tw = self.size, self.size
+        if w == tw and h == th:
+            i, j = 0, 0
+        else:
+            i = torch.randint(0, h - th + 1, (tensor.size(0),), device=self.device)
+            j = torch.randint(0, w - tw + 1, (tensor.size(0),), device=self.device)
+            
+        rows = torch.arange(th, dtype=torch.long, device=self.device) + i[:, None]
+        columns = torch.arange(tw, dtype=torch.long, device=self.device) + j[:, None]
+        padded = padded.permute(1, 0, 2, 3)
+        padded_zeros = torch.zeros_like(padded)
+        padded_zeros[:, torch.arange(tensor.size(0))[:, None, None], rows[:, torch.arange(th)[:, None]], columns[:, None]] = padded[:, torch.arange(tensor.size(0))[:, None, None], rows[:, torch.arange(th)[:, None]], columns[:, None]]
+        return padded_zeros.permute(1, 0, 2, 3)
+
 def construct_transform(transform, N_CHANNELS, SIDE, hparams=None):
+    if transform == "identity":
+        return lambda x : x
+    
     if hparams is not None:
         h = w = int(SIDE*hparams.border)//8
 
         margin_h = (SIDE-h)//2
         margin_w = (SIDE-w)//2
+    
+    if "gaussian_blur" in transform:
+        def blur(x):
+            return torchvision.transforms.functional.gaussian_blur(x, kernel_size=(hparams.blur_kernel,hparams.blur_kernel))
+        return blur
+        
+    if "intensity" in transform:
+        rho = hparams.percentile
+        def _filter_max(x):
+            N_CHANNELS = x.shape[1]
+            _intensity = torch.sum(x, dim=1) # perform fft
+            shape = _intensity.shape
+            _intensity_reshaped = _intensity.view(shape[0], -1)
+            _percentile = torch.quantile(_intensity_reshaped, rho, dim=1).unsqueeze(1)
+            # if transform == "intensity_high":
+            _intensity_mask = (_intensity_reshaped > _percentile).view(shape).unsqueeze(1)
+            # else:
+            #     _intensity_mask = (_intensity_reshaped < _percentile).view(shape).unsqueeze(1)
+            _intensity_mask_nchannel = torch.cat([_intensity_mask]*N_CHANNELS, dim=1)
+            x_clone = x.clone()
+            x_clone[_intensity_mask_nchannel] = -2
+            return x_clone
 
+        return _filter_max
+
+    if "pass" in transform:
+        assert SIDE==224
+        _h = _w = hparams.freq
+
+        if "band" in transform:
+            margin_h = (SIDE-_h)//4
+            margin_w = (SIDE-_w)//4
+
+            mask = torch.ones(1, N_CHANNELS, SIDE, SIDE)
+            if _h > 0 and _w > 0:
+                mask[:,:,margin_h : SIDE - margin_h, margin_w : SIDE - margin_w] = 0 # this is for band pass
+                mask[:,:, - margin_h + SIDE//2 : margin_h + SIDE//2,  - margin_w + SIDE//2 : margin_w + SIDE//2] = 1 # this is for band pass
+            if transform == "band_pass_keep" and _h > 0 and _w > 0:
+                mask = 1 - mask # keep only the band, without this the band is thrown away
+        else:
+            margin_h = (SIDE-_h)//2
+            margin_w = (SIDE-_w)//2
+
+            mask = torch.ones(1, N_CHANNELS, SIDE, SIDE)
+            mask[:,:,margin_h : _h + margin_h, margin_w : _w + margin_w] = 0 # this is for highpass
+            if transform == "low_pass":
+                mask = 1 - mask
+        
+        def _masker(x):
+            mask_gpu = mask.to(x.device)
+            return x*mask_gpu # this broadcasts over the batch dimension, sets hole to -1
+
+        def _pass(x):
+            _fft = torch.fft.fft2(x) # perform fft
+            _fft_shifted = torch.fft.fftshift(_fft, dim=(-2,-1)) # center the 0 components
+            _fft_shifted_highpass = _masker(_fft_shifted) # mask out the center
+            _fft_highpass = torch.fft.ifftshift(_fft_shifted_highpass, dim=(-2,-1)) # undo the centering
+            _x_highpass = torch.fft.ifft2(_fft_highpass).real # inverse fft
+            return _x_highpass.to(x.device)
+
+        return _pass
+    
     if transform == "zero_nuisance":
         def zero_nuisance(x):
             return 0*x
@@ -61,8 +171,14 @@ def construct_transform(transform, N_CHANNELS, SIDE, hparams=None):
             return x + sigma*torch.randn(x.shape).to(x.device)
         return add_gaussian_noise
 
-    if transform == "identity":
-        return lambda x : x
+    if transform == "crop":
+        _size=hparams.patch_size
+        
+        # print("USING HEAVY GAUSSIAN NUISANCE AUGMENTATION with sigma = ", sigma)
+        def random_crop(x):
+            _transform = RandomCrop(size=_size, device=x.device)
+            return _transform(x)
+        return random_crop
     
     if transform == "synthetic_last":
         return lambda x: torch.cat([0*x[:,:2],x[:,2].view(-1,1)], dim=1)
@@ -130,18 +246,17 @@ def construct_transform(transform, N_CHANNELS, SIDE, hparams=None):
 
             return ret_img
 
-    # elif transform == "patch_randomize":
-    #     patch_size = hparams.patch_size
-    #     def _transform_func(batch_x):
-    #         # return 0*batch_x
-    #         bs = batch_x.shape[0]
-    #         # cut up each image into multiple patches
-    #         batch_cuts = batch_x.reshape([bs, N_CHANNELS, -1, patch_size, patch_size])
-    #         rand_ord = torch.randperm(batch_cuts.shape[2])
-    #         # randomize patches and put things back together
-    #         batch_pr = batch_cuts[:,:,rand_ord,:,:].reshape(bs, N_CHANNELS, SIDE, SIDE)
-    #         return batch_pr
-
+    elif transform == "colorize":
+        def _transform_func(batch_x):
+            batch_x_colorized = 0*batch_x
+            for i in range(batch_x.shape[0]):
+                which_color = torch.randint(low=0,high=3,size=(1,)) # size=(batch_x.shape[0], ) )
+                # print(which_color)
+                batch_x_colorized[i, which_color] = batch_x[i].sum(dim=0)
+            save_image(batch_x_colorized, "colorized_mnist.png",  nrow=8, normalize=True, scale_each=True)
+            # assert False, (batch_x.shape, batch_x.min(), batch_x.max(), which_color.shape)
+            return batch_x_colorized
+    
     elif transform[:7] == "toprows":
         try:
             n_rows = int(transform[8:])
